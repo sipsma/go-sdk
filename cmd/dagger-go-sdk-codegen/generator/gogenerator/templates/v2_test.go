@@ -168,6 +168,30 @@ func TestEntrypointGoBuildCacheVolumes(t *testing.T) {
 	require.Contains(t, text, `.withMountedCache("/root/.cache/go-build", cacheVolume("go-sdk-v2-build"))`)
 }
 
+// The go build entrypoint downloads the module's dependencies itself, and
+// proxy.golang.org sometimes resets a module zip download mid-stream ("read
+// .../@v/v0.42.0.zip: stream error: stream ID 153; INTERNAL_ERROR; received
+// from peer"). Under Go's default GOPROXY only a 404 or 410 falls through to
+// the next entry, so the build failed, with either build. The build's
+// GOPROXY falls through on any error, as dagger/go's own builds' does; the
+// dagger/go build is dagger/go's, with its own.
+func TestEntrypointGoBuildRetriesModuleDownloads(t *testing.T) {
+	const goproxy = `.withEnvVariable("GOPROXY", "https://proxy.golang.org|https://proxy.golang.org|direct")`
+	for _, mod := range []*v2Module{{}, {goCacheVolumes: true}} {
+		source, err := mod.renderEntrypointSource("hello", ".", "golang:1.26-alpine", "main")
+		require.NoError(t, err)
+		text := string(source)
+		set := strings.Index(text, goproxy)
+		build := strings.Index(text, "go build -o /tmp/dispatch")
+		require.NotEqual(t, -1, set, "the go build's GOPROXY falls through on any error:\n%s", text)
+		require.Less(t, set, build, "GOPROXY is set before the go build runs")
+	}
+
+	source, err := (&v2Module{daggerGo: true}).renderEntrypointSource("hello", ".", "golang:1.26-alpine", "main")
+	require.NoError(t, err)
+	require.NotContains(t, string(source), "GOPROXY")
+}
+
 func TestEntrypointWithoutOutsideFilesReturnsItsOwnDirectory(t *testing.T) {
 	source, err := (&v2Module{}).renderEntrypointSource("hello-world", ".", "golang:1.26-alpine")
 	require.NoError(t, err)
