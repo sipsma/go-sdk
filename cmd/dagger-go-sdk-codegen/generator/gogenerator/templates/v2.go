@@ -1236,9 +1236,18 @@ func developerArgEncoding(spec ParsedType) string {
 	return "json"
 }
 
+// dispatchGoproxy is the go build's GOPROXY. proxy.golang.org sometimes
+// resets a module zip download mid-stream ("stream error: stream ID N;
+// INTERNAL_ERROR; received from peer"), and with Go's default GOPROXY only a
+// 404 or 410 falls through to the next entry, so the build fails. "|" falls
+// through on any error: a failed download retries the proxy once, then
+// fetches from the origin, as dagger/go's builds do.
+const dispatchGoproxy = "https://proxy.golang.org|https://proxy.golang.org|direct"
+
 // writeGoBuildDispatch writes the entrypoint's dispatch member as a go build
 // of the module's process at buildTarget, in goImage, in one exec; with
-// cacheVolumes, around Go module and build cache volumes. With declares, it builds for a platform it is given,
+// cacheVolumes, around Go module and build cache volumes. Its module downloads
+// retry (dispatchGoproxy). With declares, it builds for a platform it is given,
 // which the engine's own Go toolchain compiles for, and declares the binary
 // as made for that platform (Directory.withPlatform): an engine of that
 // platform finds the one an engine of another platform made, such as in the
@@ -1261,6 +1270,7 @@ func writeGoBuildDispatch(b *bytes.Buffer, goImage, workdir, buildTarget string,
 	fmt.Fprintf(b, "      .withWorkdir(%s)\n", workdir)
 	b.WriteString("      .withEnvVariable(\"CGO_ENABLED\", \"0\")\n")
 	b.WriteString("      .withEnvVariable(\"GOWORK\", \"off\")\n")
+	fmt.Fprintf(b, "      .withEnvVariable(\"GOPROXY\", %s)\n", strconv.Quote(dispatchGoproxy))
 	output := "/tmp/dispatch"
 	if declares {
 		b.WriteString("      .withEnvVariable(\"GOOS\", target.takeFirst(1).join(\"\"))\n")
